@@ -1,0 +1,285 @@
+package com.example.myplugin;
+
+import org.bukkit.Chunk;
+import org.bukkit.GameMode;
+import org.bukkit.Location;
+import org.bukkit.Material;
+import org.bukkit.World;
+import org.bukkit.block.Block;
+import org.bukkit.entity.Player;
+import org.bukkit.event.EventHandler;
+import org.bukkit.event.EventPriority;
+import org.bukkit.event.Listener;
+import org.bukkit.event.block.Action;
+import org.bukkit.event.player.PlayerInteractEvent;
+import org.bukkit.event.player.PlayerJoinEvent;
+import org.bukkit.event.player.PlayerQuitEvent;
+import org.bukkit.event.player.PlayerTeleportEvent;
+import org.bukkit.event.player.PlayerTeleportEvent.TeleportCause;
+import org.bukkit.event.world.ChunkLoadEvent;
+import org.bukkit.inventory.ItemStack;
+import org.bukkit.plugin.java.JavaPlugin;
+import org.bukkit.plugin.messaging.PluginMessageListener;
+import org.bukkit.scheduler.BukkitRunnable;
+
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
+import java.io.DataInputStream;
+import java.io.DataOutputStream;
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.util.Collections;
+import java.util.Set;
+import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
+
+public class TuffX extends JavaPlugin implements Listener, PluginMessageListener {
+
+    public static final String CHANNEL = "eagler:below_y0";
+    private final Set<ChunkSectionKey> sentSections = Collections.newSetFromMap(new ConcurrentHashMap<>());
+
+    @Override
+    public void onEnable() {
+        LegacyBlockIdManager.initialize(this);
+        getServer().getMessenger().registerOutgoingPluginChannel(this, CHANNEL);
+        getServer().getMessenger().registerIncomingPluginChannel(this, CHANNEL, this);
+        getServer().getPluginManager().registerEvents(this, this);
+        logFancyEnable();
+    }
+    
+    private void logFancyEnable() {
+        getLogger().info("");
+        getLogger().info("████████╗██╗   ██╗███████╗ ███████╗ ██╗  ██╗");
+        getLogger().info("╚══██╔══╝██║   ██║██╔════╝ ██╔════╝ ╚██╗██╔╝");
+        getLogger().info("   ██║   ██║   ██║██████╗  ██████╗   ╚███╔╝ ");
+        getLogger().info("   ██║   ██║   ██║██╔═══╝  ██╔═══╝   ██╔██╗ ");
+        getLogger().info("   ██║   ╚██████╔╝██║      ██║      ██╔╝╚██╗");
+        getLogger().info("   ╚═╝    ╚═════╝ ╚═╝      ╚═╝      ╚═╝  ╚═╝");
+        getLogger().info("");
+    }
+
+    @Override
+    public void onDisable() {
+        getServer().getMessenger().unregisterOutgoingPluginChannel(this);
+        getServer().getMessenger().unregisterIncomingPluginChannel(this);
+        sentSections.clear();
+        getLogger().info("TuffX disabled");
+    }
+    
+    @Override
+    public void onPluginMessageReceived(String channel, Player player, byte[] message) {
+        if (!channel.equals(CHANNEL)) { return; }
+        
+        try (ByteArrayInputStream bin = new ByteArrayInputStream(message); DataInputStream in = new DataInputStream(bin)) {
+            int x = in.readInt();
+            int y = in.readInt();
+            int z = in.readInt();
+            int actionLength = in.readUnsignedByte();
+            byte[] actionBytes = new byte[actionLength];
+            in.readFully(actionBytes);
+            String action = new String(actionBytes, StandardCharsets.UTF_8);
+            
+            new BukkitRunnable() {
+                @Override
+                public void run() {
+                    handleInteraction(player, new Location(player.getWorld(), x, y, z), action);
+                }
+            }.runTask(this);
+        } catch (IOException e) {
+            getLogger().warning("Failed to parse plugin message from " + player.getName() + ": " + e.getMessage());
+        }
+    }
+
+    private void handleInteraction(Player player, Location loc, String action) {
+        World world = loc.getWorld();
+        Block block = world.getBlockAt(loc);
+
+        switch (action.toLowerCase()) {
+            case "break":
+                if (player.getGameMode() == GameMode.SURVIVAL) {
+                    block.breakNaturally();
+                } else {
+                    block.setType(Material.AIR);
+                }
+                sendBlockUpdateToNearby(block.getLocation(), Material.AIR);
+                break;
+                
+            case "use_on_block":
+                ItemStack itemInHand = player.getInventory().getItemInMainHand();
+                PlayerInteractEvent event = new PlayerInteractEvent(player, Action.RIGHT_CLICK_BLOCK, itemInHand, block, block.getFace(player.getLocation().getBlock()));
+                getServer().getPluginManager().callEvent(event);
+                
+                sendBlockUpdateToNearby(block.getLocation(), world.getBlockAt(loc).getType());
+                break;
+                
+            case "dig_start_destroy_block":
+            case "dig_abort_destroy_block":
+                break;
+                
+            default:
+                getLogger().info("Received unhandled action '" + action + "' from " + player.getName());
+                break;
+        }
+    }
+
+    private void sendBlockUpdateToNearby(Location loc, Material newMaterial) {
+        byte[] payload = createBlockUpdatePayload(loc, newMaterial);
+        for (Player p : loc.getWorld().getPlayers()) {
+            if (p.getLocation().distanceSquared(loc) < 4096) {
+                p.sendPluginMessage(this, CHANNEL, payload);
+            }
+        }
+    }
+
+    private byte[] createBlockUpdatePayload(Location loc, Material newMaterial) {
+        try (ByteArrayOutputStream bout = new ByteArrayOutputStream(); DataOutputStream out = new DataOutputStream(bout)) {
+            out.writeUTF("block_update");
+            out.writeInt(loc.getBlockX());
+            out.writeInt(loc.getBlockY());
+            out.writeInt(loc.getBlockZ());
+            out.writeShort(LegacyBlockIdManager.getLegacyShort(newMaterial));
+            return bout.toByteArray();
+        } catch (IOException e) {
+            getLogger().severe("Failed to create block update payload! " + e.getMessage());
+            return new byte[0];
+        }
+    }
+    
+    private byte[] createWelcomePayload(String message, int someNumber) {
+        try (ByteArrayOutputStream bout = new ByteArrayOutputStream(); 
+             DataOutputStream out = new DataOutputStream(bout)) {
+            
+            out.writeUTF("welcome_data"); 
+      
+            out.writeUTF(message);
+            out.writeInt(someNumber);
+            
+            return bout.toByteArray();
+            
+        } catch (IOException e) {
+            getLogger().severe("Failed to create welcome payload! " + e.getMessage());
+            return new byte[0]; 
+        }
+    }
+
+    private byte[] createSectionPayload(World world, int cx, int cz, int sectionY) throws IOException {
+        try (ByteArrayOutputStream bout = new ByteArrayOutputStream(8200); DataOutputStream out = new DataOutputStream(bout)) {
+            out.writeUTF("chunk_data");
+            out.writeInt(cx);
+            out.writeInt(cz);
+            out.writeInt(sectionY);
+            
+            int baseY = sectionY * 16;
+            for (int y = 0; y < 16; y++) {
+                for (int z = 0; z < 16; z++) {
+                    for (int x = 0; x < 16; x++) {
+                        int worldX = (cx << 4) + x;
+                        int worldY = baseY + y;
+                        int worldZ = (cz << 4) + z;
+                        Material type = world.getBlockAt(worldX, worldY, worldZ).getType();
+                        short legacyId = LegacyBlockIdManager.getLegacyShort(type);
+                        out.writeShort(legacyId);
+                    }
+                }
+            }
+            return bout.toByteArray();
+        }
+    }
+    
+    @EventHandler(priority = EventPriority.HIGHEST)
+    public void onPlayerTeleport(PlayerTeleportEvent event) {
+        if (event.getCause() == TeleportCause.UNKNOWN && event.getFrom().getY() < 0) {
+            if (event.getPlayer().getGameMode() != GameMode.CREATIVE && event.getPlayer().getGameMode() != GameMode.SPECTATOR) {
+                event.setCancelled(true);
+            }
+        }
+    }
+    
+    @EventHandler
+    public void onPlayerQuit(PlayerQuitEvent event) {
+        UUID playerId = event.getPlayer().getUniqueId();
+        sentSections.removeIf(key -> key.playerId().equals(playerId));
+    }
+    
+    @EventHandler
+    public void onPlayerJoin(PlayerJoinEvent event) {
+        Player player = event.getPlayer();
+        new BukkitRunnable() {
+            @Override
+            public void run() {
+                if (!player.isOnline()) return;
+
+                String welcomeMessage = "§bWelcome to the server, §e" + player.getName() + "§b!";
+                int playersOnline = getServer().getOnlinePlayers().size();
+                byte[] welcomePayload = createWelcomePayload(welcomeMessage, playersOnline);
+                if (welcomePayload.length > 0) {
+                    player.sendPluginMessage(TuffX.this, CHANNEL, welcomePayload);
+                }
+                
+                Chunk playerChunk = player.getLocation().getChunk();
+                int viewDistance = getServer().getViewDistance();
+                World world = player.getWorld();
+
+                for (int x = -viewDistance; x <= viewDistance; x++) {
+                    for (int z = -viewDistance; z <= viewDistance; z++) {
+                        if (world.isChunkLoaded(playerChunk.getX() + x, playerChunk.getZ() + z)) {
+                            Chunk chunk = world.getChunkAt(playerChunk.getX() + x, playerChunk.getZ() + z);
+                            sendChunkSectionsAsync(player, chunk);
+                        }
+                    }
+                }
+            }
+        }.runTaskLater(this, 20L); 
+    }
+    
+    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
+    public void onChunkLoad(ChunkLoadEvent event) {
+        if (event.isNewChunk()) return;
+        Chunk chunk = event.getChunk();
+        for (Player player : chunk.getWorld().getPlayers()) {
+            if (isPlayerInChunkRange(player, chunk, getServer().getViewDistance())) {
+                sendChunkSectionsAsync(player, chunk);
+            }
+        }
+    }
+
+    private boolean isPlayerInChunkRange(Player player, Chunk chunk, int range) {
+        int playerChunkX = player.getLocation().getChunk().getX();
+        int playerChunkZ = player.getLocation().getChunk().getZ();
+        return Math.abs(playerChunkX - chunk.getX()) <= range && Math.abs(playerChunkZ - chunk.getZ()) <= range;
+    }
+
+    private void sendChunkSectionsAsync(Player player, Chunk chunk) {
+        new BukkitRunnable() {
+            @Override
+            public void run() {
+                int cx = chunk.getX();
+                int cz = chunk.getZ();
+                UUID uid = player.getUniqueId();
+                String worldName = chunk.getWorld().getName();
+                World world = chunk.getWorld();
+
+                for (int sectionY = -4; sectionY < 0; sectionY++) {
+                    ChunkSectionKey key = new ChunkSectionKey(uid, worldName, cx, cz, sectionY);
+                    if (sentSections.contains(key)) {
+                        continue;
+                    }
+                    try {
+                        byte[] payload = createSectionPayload(world, cx, cz, sectionY);
+                        new BukkitRunnable() {
+                            @Override
+                            public void run() {
+                                if (player.isOnline()) {
+                                    player.sendPluginMessage(TuffX.this, CHANNEL, payload);
+                                    sentSections.add(key);
+                                }
+                            }
+                        }.runTask(TuffX.this);
+                    } catch (IOException e) {
+                        getLogger().severe("Failed to create payload for chunk section: " + key + " | " + e.getMessage());
+                    }
+                }
+            }
+        }.runTaskAsynchronously(this);
+    }
+}

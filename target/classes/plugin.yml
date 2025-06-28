@@ -1,0 +1,5 @@
+name: TuffX
+version: 1.0
+main: com.example.myplugin.TuffX
+author: Potato
+api-version: 1.20
