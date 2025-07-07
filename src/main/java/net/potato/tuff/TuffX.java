@@ -81,7 +81,8 @@ public class TuffX extends JavaPlugin implements Listener, PluginMessageListener
         getLogger().info("   ██║   ╚██████╔╝██║      ██║      ██╔╝╚██╗");
         getLogger().info("   ╚═╝    ╚═════╝ ╚═╝      ╚═╝      ╚═╝  ╚═╝");
         getLogger().info("");
-        getLogger().info("by potato patato :0, edited by coleis1op");
+        getLogger().info("Below y0 and TuffX programmed by Potato");
+        getLogger().info("Edited by coleis1op");
     }
 
     @Override
@@ -122,6 +123,7 @@ public class TuffX extends JavaPlugin implements Listener, PluginMessageListener
 
         switch (action.toLowerCase()) {
             case "break":
+                getLogger().info("breaking block at "+loc.getX()+","+loc.getY()+","+loc.getZ());
                 if (player.getGameMode() == GameMode.SURVIVAL) {
                     block.breakNaturally();
                 } else {
@@ -254,7 +256,7 @@ public class TuffX extends JavaPlugin implements Listener, PluginMessageListener
                     }
                 }
             }
-        }.runTaskLater(this, 20L);
+        }.runTaskLater(this, 1L);
     }
 
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
