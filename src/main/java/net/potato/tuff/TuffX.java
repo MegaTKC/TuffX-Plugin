@@ -126,6 +126,28 @@ public class TuffX extends JavaPlugin implements Listener, PluginMessageListener
         return Collections.emptyList();
     }
 
+    private void sendInitialChunksToPlayer(Player player) {
+        new BukkitRunnable() {
+            @Override
+            public void run() {
+                if (!player.isOnline()) return;
+
+                Chunk playerChunk = player.getLocation().getChunk();
+                int viewDistance = getServer().getViewDistance();
+                World world = player.getWorld();
+
+                for (int x = -viewDistance; x <= viewDistance; x++) {
+                    for (int z = -viewDistance; z <= viewDistance; z++) {
+                        if (world.isChunkLoaded(playerChunk.getX() + x, playerChunk.getZ() + z)) {
+                            Chunk chunk = world.getChunkAt(playerChunk.getX() + x, playerChunk.getZ() + z);
+                            sendChunkSectionsAsync(player, chunk);
+                        }
+                    }
+                }
+            }
+        }.runTaskLater(this, 1L);
+    }
+
     private void handleMuteCommand(CommandSender sender) {
         if (!sender.hasPermission("tuffx.mute")) {
             sender.sendMessage(ChatColor.RED + "You don't have permission to use this command.");
@@ -275,7 +297,9 @@ public class TuffX extends JavaPlugin implements Listener, PluginMessageListener
                 int playersOnline = getServer().getOnlinePlayers().size();
                 byte[] welcomePayload = createWelcomePayload(welcomeMessage, playersOnline);
                 player.sendPluginMessage(TuffX.this, CHANNEL, welcomePayload);
-                System.out.println("ready packet recieved, sent welcome payload");
+
+                sendInitialChunksToPlayer(player);
+
                 break;
 
             default:
@@ -481,19 +505,6 @@ public class TuffX extends JavaPlugin implements Listener, PluginMessageListener
                 byte[] welcomePayload = createWelcomePayload(welcomeMessage, playersOnline);
                 if (welcomePayload.length > 0) {
                     player.sendPluginMessage(TuffX.this, CHANNEL, welcomePayload);
-                }
-
-                Chunk playerChunk = player.getLocation().getChunk();
-                int viewDistance = getServer().getViewDistance();
-                World world = player.getWorld();
-
-                for (int x = -viewDistance; x <= viewDistance; x++) {
-                    for (int z = -viewDistance; z <= viewDistance; z++) {
-                        if (world.isChunkLoaded(playerChunk.getX() + x, playerChunk.getZ() + z)) {
-                            Chunk chunk = world.getChunkAt(playerChunk.getX() + x, playerChunk.getZ() + z);
-                            sendChunkSectionsAsync(player, chunk);
-                        }
-                    }
                 }
             }
         }.runTaskLater(this, 1L);
