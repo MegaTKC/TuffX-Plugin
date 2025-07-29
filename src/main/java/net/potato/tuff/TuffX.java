@@ -206,7 +206,6 @@ public class TuffX extends JavaPlugin implements Listener, PluginMessageListener
     }
 
     private void logFancyEnable() {
-        if (isMuted) return;
         getLogger().info("");
         getLogger().info("████████╗██╗   ██╗███████╗ ███████╗ ██╗  ██╗");
         getLogger().info("╚══██╔══╝██║   ██║██╔════╝ ██╔════╝ ╚██╗██╔╝");
