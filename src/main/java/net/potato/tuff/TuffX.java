@@ -26,6 +26,10 @@ import org.bukkit.event.block.BlockPhysicsEvent;
 import org.bukkit.event.player.PlayerTeleportEvent;
 import org.bukkit.event.player.PlayerChangedWorldEvent;
 
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
+
 import java.io.*;
 import java.nio.charset.StandardCharsets;
 import java.util.*;
@@ -52,6 +56,8 @@ public class TuffX extends JavaPlugin implements Listener, PluginMessageListener
 
     private boolean debug;
 
+    private ExecutorService chunkProcessorPool;
+
     private void logDebug(String message) {
         if (debug) getLogger().log(Level.INFO, "[TuffX-Debug] " + message);
     }
@@ -70,6 +76,19 @@ public class TuffX extends JavaPlugin implements Listener, PluginMessageListener
         getServer().getPluginManager().registerEvents(this, this);
         if (this.viablockids == null) this.viablockids = new ViaBlockIds(this);
         logFancyEnable();
+
+        int configuredThreads = getConfig().getInt("chunk-processor-threads", -1);
+        int threadCount;
+        if (configuredThreads <= 0) {
+            threadCount = Math.max(1, Math.min(4, Runtime.getRuntime().availableProcessors() / 2));
+            logDebug("Auto-detected and using " + threadCount + " threads for the chunk processor pool.");
+        } else {
+            threadCount = configuredThreads;
+            getLogger().info("Using user-configured thread count of " + threadCount + " for the chunk processor pool.");
+        }
+        
+        this.chunkProcessorPool = Executors.newFixedThreadPool(threadCount);
+
         startProcessorTask();
     }
 
@@ -78,6 +97,20 @@ public class TuffX extends JavaPlugin implements Listener, PluginMessageListener
     @Override
     public void onDisable() {
         if (processorTask != null) processorTask.cancel();
+
+        if (chunkProcessorPool != null) {
+            chunkProcessorPool.shutdown();
+            try {
+                if (!chunkProcessorPool.awaitTermination(5, TimeUnit.SECONDS)) {
+                    getLogger().warning("Chunk processor pool did not shut down cleanly, forcing shutdown.");
+                    chunkProcessorPool.shutdownNow();
+                }
+            } catch (InterruptedException e) {
+                chunkProcessorPool.shutdownNow();
+                Thread.currentThread().interrupt();
+            }
+        }
+
         requestQueue.clear();
         awaitingInitialBatch.clear();
         initialChunksToProcess.clear();
@@ -216,55 +249,57 @@ public class TuffX extends JavaPlugin implements Listener, PluginMessageListener
 
         Queue<Vector> playerQueue = requestQueue.get(playerId);
         if (playerQueue != null && !playerQueue.isEmpty()) {
-            logDebug("Player " + player.getName() + " changed worlds. Clearing " + playerQueue.size() + " pending chunk requests.");
-            playerQueue.clear();
+                logDebug("Player " + player.getName() + " changed worlds. Clearing " + playerQueue.size() + " pending chunk requests.");
+                playerQueue.clear();
+            }
+            
+            if (initialChunksToProcess.remove(playerId) != null) {
+                logDebug("Player " + player.getName() + " was in the middle of an initial chunk load. The process has been cancelled.");
+                awaitingInitialBatch.remove(playerId);
+                player.sendPluginMessage(this, CHANNEL, createLoadFinishedPayload());
+            }
+
+            player.sendPluginMessage(this, CHANNEL, createDimensionPayload());
+
+            player.sendPluginMessage(this, CHANNEL, createBelowY0StatusPayload(enabledWorlds.contains(player.getWorld().getName())));
         }
-        
-        if (initialChunksToProcess.remove(playerId) != null) {
-            logDebug("Player " + player.getName() + " was in the middle of an initial chunk load. The process has been cancelled.");
-            awaitingInitialBatch.remove(playerId);
-            player.sendPluginMessage(this, CHANNEL, createLoadFinishedPayload());
+
+        private void processAndSendChunk(final Player player, final Chunk chunk) {
+        if (chunk == null || !player.isOnline() || chunkProcessorPool.isShutdown()) {
+            return;
         }
 
-        player.sendPluginMessage(this, CHANNEL, createDimensionPayload());
+        chunkProcessorPool.submit(() -> {
+            final List<byte[]> processedPayloads = new ArrayList<>();
+            final ChunkSnapshot snapshot = chunk.getChunkSnapshot(true, false, false);
+            final Map<BlockData, int[]> conversionCache = new HashMap<>();
 
-        player.sendPluginMessage(this, CHANNEL, createBelowY0StatusPayload(enabledWorlds.contains(player.getWorld().getName())));
-    }
+            for (int sectionY = -4; sectionY < 0; sectionY++) {
+                if (!player.isOnline()) {
+                    return;
+                }
+                try {
+                    byte[] payload = createSectionPayload(snapshot, chunk.getX(), chunk.getZ(), sectionY, conversionCache);
+                    if (payload != null) {
+                        processedPayloads.add(payload);
+                    }
+                } catch (IOException e) {
+                    getLogger().severe("Payload creation failed for " + chunk.getX() + "," + chunk.getZ() + ": " + e.getMessage());
+                }
+            }
 
-    private void processAndSendChunk(final Player player, final Chunk chunk) {
-        if (chunk == null || !player.isOnline()) return;
-
-        final Vector chunkVec = new Vector(chunk.getX(), 0, chunk.getZ());
-        logDebug("Processing chunk " + chunk.getX() + "," + chunk.getZ() + " for " + player.getName());
-
-        new BukkitRunnable() {
-            @Override
-            public void run() {
-                final ChunkSnapshot snapshot = chunk.getChunkSnapshot(true, false, false);
-                final Map<BlockData, int[]> conversionCache = new HashMap<>();
-
-                for (int sectionY = -4; sectionY < 0; sectionY++) {
-                    if (!player.isOnline()) break;
-                    try {
-                        byte[] payload = createSectionPayload(snapshot, chunk.getX(), chunk.getZ(), sectionY, conversionCache);
-                        if (payload != null) {
+            new BukkitRunnable() {
+                @Override
+                public void run() {
+                    if (player.isOnline()) {
+                        for (byte[] payload : processedPayloads) {
                             player.sendPluginMessage(TuffX.this, CHANNEL, payload);
                         }
-                    } catch (IOException e) {
-                        getLogger().severe("Payload creation failed for " + chunk.getX() + "," + chunk.getZ() + ": " + e.getMessage());
+                        checkIfInitialLoadComplete(player);
                     }
                 }
-
-                new BukkitRunnable() {
-                    @Override
-                    public void run() {
-                        if (player.isOnline()) {
-                            checkIfInitialLoadComplete(player);
-                        }
-                    }
-                }.runTask(TuffX.this);
-            }
-        }.runTaskAsynchronously(this);
+            }.runTask(this);
+        });
     }
 
     private void checkIfInitialLoadComplete(Player player) {
@@ -318,36 +353,53 @@ public class TuffX extends JavaPlugin implements Listener, PluginMessageListener
     }
     
     private byte[] createSectionPayload(ChunkSnapshot snapshot, int cx, int cz, int sectionY, Map<BlockData, int[]> cache) throws IOException {
-        try (ByteArrayOutputStream bout = new ByteArrayOutputStream(12300); DataOutputStream out = new DataOutputStream(bout)) {
+        short[] blockDataArray = new short[4096];
+        byte[] lightDataArray = new byte[4096];
+        
+        boolean hasAnythingToSend = false;
+        int baseY = sectionY * 16;
+        int index = 0;
+
+        for (int y = 0; y < 16; y++) {
+            for (int z = 0; z < 16; z++) {
+                for (int x = 0; x < 16; x++) {
+                    int worldY = baseY + y;
+                    
+                    BlockData blockData = snapshot.getBlockData(x, worldY, z);
+                    int[] legacyData = cache.computeIfAbsent(blockData, viablockids::toLegacy);
+                    
+                    short legacyBlock = (short) ((legacyData[1] << 12) | (legacyData[0] & 0xFFF));
+                    byte packedLight = (byte) ((snapshot.getBlockSkyLight(x, worldY, z) << 4) | snapshot.getBlockEmittedLight(x, worldY, z));
+
+                    blockDataArray[index] = legacyBlock;
+                    lightDataArray[index] = packedLight;
+
+                    if (legacyBlock != 0 || packedLight != 0) {
+                        hasAnythingToSend = true;
+                    }
+                    index++;
+                }
+            }
+        }
+
+        if (!hasAnythingToSend) {
+            return null;
+        }
+        
+        try (ByteArrayOutputStream bout = new ByteArrayOutputStream(8256);
+            DataOutputStream out = new DataOutputStream(bout)) {
+            
             out.writeUTF("chunk_data");
             out.writeInt(cx);
             out.writeInt(cz);
             out.writeInt(sectionY);
 
-            boolean hasAnythingToSend = false;
-            int baseY = sectionY * 16;
-
-            for (int y = 0; y < 16; y++) {
-                for (int z = 0; z < 16; z++) {
-                    for (int x = 0; x < 16; x++) {
-                        int worldY = baseY + y;
-                        
-                        BlockData blockData = snapshot.getBlockData(x, worldY, z);
-                        int[] legacyData = cache.computeIfAbsent(blockData, viablockids::toLegacy);
-                        out.writeShort((short) ((legacyData[1] << 12) | (legacyData[0] & 0xFFF)));
-
-                        int blockLight = snapshot.getBlockEmittedLight(x, worldY, z);
-                        int skyLight = snapshot.getBlockSkyLight(x, worldY, z);
-                        out.writeByte((byte) ((skyLight << 4) | blockLight));
-
-                        if (legacyData[0] != 0 || blockLight != 0 || skyLight != 0) {
-                            hasAnythingToSend = true;
-                        }
-                    }
-                }
+            for (int i = 0; i < 4096; i++) {
+                out.writeShort(blockDataArray[i]);
+                out.writeByte(lightDataArray[i]);
             }
             
-            return hasAnythingToSend ? bout.toByteArray() : null;
+            return bout.toByteArray();
         }
     }
 
