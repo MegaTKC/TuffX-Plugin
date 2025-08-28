@@ -17,9 +17,9 @@ cache-size: 512
 #how long until the cache expires (minutes)
 cache-expiration: 5
 
-#auto updater config
+#auto updater config (very experimental)
 updater:
-  enabled: true
+  enabled: false
 
   # update checking interval
   check-interval-minutes: 30
