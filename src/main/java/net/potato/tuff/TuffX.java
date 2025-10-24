@@ -164,7 +164,7 @@ public class TuffX extends JavaPlugin implements Listener, PluginMessageListener
     }
 
     private void hip(Player p, Location l, String a) {
-        if (!ew.contains(p.getWorld().getName())) {
+        if (!ew.contains(p.getWorld().getName()) && !a.equalsIgnoreCase("ready")) {
             p.sendPluginMessage(this, CH, cby0sp(false));
             return;
         }
@@ -172,6 +172,7 @@ public class TuffX extends JavaPlugin implements Listener, PluginMessageListener
         switch (a.toLowerCase()) {
             case "ready":
                 ld("Player " + p.getName() + " is READY.");
+                aib.add(p.getUniqueId());
                 if (ew.contains(p.getWorld().getName())) {
                     aib.add(p.getUniqueId());
                     p.sendPluginMessage(this, CH, cby0sp(true));
