@@ -1,4 +1,4 @@
-package net.potato.tuff;
+package tf.tuff;
 
 import org.bukkit.Material;
 import org.bukkit.plugin.Plugin;

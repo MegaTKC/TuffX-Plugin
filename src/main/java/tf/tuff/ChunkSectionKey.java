@@ -1,4 +1,4 @@
-package net.potato.tuff;
+package tf.tuff;
 
 import java.util.Objects;
 import java.util.UUID;

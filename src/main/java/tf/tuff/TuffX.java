@@ -1,4 +1,4 @@
-package net.potato.tuff;
+package tf.tuff;
 
 import org.bukkit.Chunk;
 import org.bukkit.ChunkSnapshot;
@@ -191,7 +191,9 @@ public class TuffX extends JavaPlugin implements Listener, PluginMessageListener
                 }.runTask(this);
                 break;
             case "ready":
-                p.kickPlayer("§cYour client is not compatible with the version of §6TuffX §cthe server has installed!\n§7Please update your client.");
+                if (getConfig().getBoolean("kick-outdated-clients", true)){
+                    p.kickPlayer("§cYour client is not compatible with the version of §6TuffX §cthe server has installed!\n§7Please update your client.");
+                }
         }
     }
 

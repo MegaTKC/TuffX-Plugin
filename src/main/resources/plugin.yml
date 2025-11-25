@@ -1,6 +1,6 @@
 name: TuffX
-version: 1.1.0
-main: net.potato.tuff.TuffX
+version: 1.1.1
+main: tf.tuff.TuffX
 author: Potato
 api-version: 1.21
 depend: [ViaVersion, ViaBackwards]

@@ -13,3 +13,6 @@ chunk-processor-threads: -1
 cache-size: 512
 #how long until the cache expires (minutes)
 cache-expiration: 5
+
+# Kick outdated clients that (generally) not compatible with this version of TuffX
+kick-outdated-clients: true
