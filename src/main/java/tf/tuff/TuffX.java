@@ -1,5 +1,8 @@
 package tf.tuff;
 
+import com.github.retrooper.packetevents.PacketEvents;
+import com.github.retrooper.packetevents.event.PacketListenerPriority;
+import io.github.retrooper.packetevents.factory.spigot.SpigotPacketEventsBuilder;
 import org.bukkit.Chunk;
 import org.bukkit.ChunkSnapshot;
 import org.bukkit.Location;
@@ -16,8 +19,6 @@ import org.bukkit.event.block.BlockBreakEvent;
 import org.bukkit.event.block.BlockPlaceEvent;
 import org.bukkit.event.player.PlayerInteractEvent;
 import org.bukkit.event.player.PlayerQuitEvent;
-import org.bukkit.inventory.ItemStack;
-import org.bukkit.plugin.Plugin;
 import org.bukkit.plugin.java.JavaPlugin;
 import org.bukkit.plugin.messaging.PluginMessageListener;
 import org.bukkit.scheduler.BukkitRunnable;
@@ -33,6 +34,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.*;
 import com.google.common.cache.*;
 import java.util.logging.Level;
+import java.lang.reflect.Method; 
 import it.unimi.dsi.fastutil.objects.*;
 import it.unimi.dsi.fastutil.shorts.*;
 import it.unimi.dsi.fastutil.bytes.*;
@@ -55,6 +57,38 @@ public class TuffX extends JavaPlugin implements Listener, PluginMessageListener
     
     private static final int[] EMPTY_LEGACY = {1, 0};
 
+    private static Method getLightEmissionMethod;
+
+    static {
+        try {
+            getLightEmissionMethod = BlockData.class.getMethod("getLightEmission");
+        } catch (NoSuchMethodException e) {
+            getLightEmissionMethod = null;
+        }
+    }
+
+    private static final Map<Material, Integer> legacy_light_map = Map.ofEntries(
+        Map.entry(Material.TORCH, 14),
+        Map.entry(Material.SOUL_TORCH, 10),
+        Map.entry(Material.LANTERN, 15),
+        Map.entry(Material.SOUL_LANTERN, 10),
+        Map.entry(Material.GLOWSTONE, 15),
+        Map.entry(Material.SEA_LANTERN, 15),
+        Map.entry(Material.REDSTONE_LAMP, 15),
+        Map.entry(Material.SHROOMLIGHT, 15),
+        Map.entry(Material.CAMPFIRE, 15),
+        Map.entry(Material.SOUL_CAMPFIRE, 10),
+        Map.entry(Material.END_ROD, 14),
+        Map.entry(Material.MAGMA_BLOCK, 3),
+        Map.entry(Material.FIRE, 15),
+        Map.entry(Material.SOUL_FIRE, 10),
+        Map.entry(Material.CANDLE, 3),
+        Map.entry(Material.WHITE_CANDLE, 3),
+        Map.entry(Material.CAKE, 0),
+        Map.entry(Material.CANDLE_CAKE, 3)
+    );
+
+
     private void ld(String m) {
         if (d) getLogger().log(Level.INFO, "[TuffX-Debug] " + m);
     }
@@ -62,21 +96,27 @@ public class TuffX extends JavaPlugin implements Listener, PluginMessageListener
     public record WCK(String w, int x, int z) {}
 
     @Override
+    public void onLoad() {
+        PacketEvents.setAPI(SpigotPacketEventsBuilder.build(this));
+        PacketEvents.getAPI().getSettings().reEncodeByDefault(false)
+                .checkForUpdates(false)
+                .bStats(true);
+        PacketEvents.getAPI().load();
+    }
+
+    @Override
     public void onEnable() {
+        PacketEvents.getAPI().init();
+
         saveDefaultConfig();
         d = getConfig().getBoolean("debug-mode", false);
         ObjectArrayList<String> ewList = new ObjectArrayList<>(getConfig().getStringList("enabled-worlds"));
         ew = new ObjectOpenHashSet<>(ewList.size());
         ew.addAll(ewList);
         
-        Plugin protocolLib = getServer().getPluginManager().getPlugin("ProtocolLib");
-        if (protocolLib == null) {
-            getLogger().severe("ProtocolLib not found! This plugin is required for proactive chunk sending.");
-            getLogger().severe("TuffX will not be able to send below y=0 data.");
-            getServer().getPluginManager().disablePlugin(this);
-            return;
-        }
-        ChunkPacketListener.initialize(this);
+        PacketEvents.getAPI().getEventManager().registerListener(
+            new ChunkPacketListener(this), PacketListenerPriority.NORMAL
+        );
 
         cc = CacheBuilder.newBuilder()
             .maximumSize(getConfig().getInt("cache-size", 1024))
@@ -111,6 +151,8 @@ public class TuffX extends JavaPlugin implements Listener, PluginMessageListener
 
     @Override
     public void onDisable() {
+        PacketEvents.getAPI().terminate();
+
         if (cp != null) {
             cp.shutdown();
             try {
@@ -181,14 +223,6 @@ public class TuffX extends JavaPlugin implements Listener, PluginMessageListener
                 }
                 break;
             case "use_on_block":
-                new BukkitRunnable() {
-                    @Override
-                    public void run() {
-                        Block b = l.getBlock();
-                        ItemStack it = p.getInventory().getItemInMainHand();
-                        getServer().getPluginManager().callEvent(new PlayerInteractEvent(p, Action.RIGHT_CLICK_BLOCK, it, b, b.getFace(p.getLocation().getBlock())));
-                    }
-                }.runTask(this);
                 break;
             case "ready":
                 if (getConfig().getBoolean("kick-outdated-clients", true)){
@@ -465,10 +499,20 @@ public class TuffX extends JavaPlugin implements Listener, PluginMessageListener
         }
     }
 
+    public static int getEmission(BlockData data) {
+        if (getLightEmissionMethod != null) {
+            try {
+                return (int) getLightEmissionMethod.invoke(data);
+            } catch (Exception e) {
+            }
+        }
+        return legacy_light_map.getOrDefault(data.getMaterial(), 0);
+    }
+
     private void hbc(Location l, BlockData od, BlockData nd) {
         ssbu(l, nd);
-        boolean oe = od.getLightEmission() > 0;
-        boolean ne = nd.getLightEmission() > 0;
+        boolean oe = getEmission(od) > 0;
+        boolean ne = getEmission(nd) > 0;
         boolean oo = od.getMaterial().isOccluding();
         boolean no = nd.getMaterial().isOccluding();
         if (oe != ne || oo != no) {

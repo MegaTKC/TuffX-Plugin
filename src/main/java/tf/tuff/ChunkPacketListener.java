@@ -1,54 +1,42 @@
 package tf.tuff;
 
-import com.comphenix.protocol.PacketType;
-import com.comphenix.protocol.ProtocolLibrary;
-import com.comphenix.protocol.ProtocolManager;
-import com.comphenix.protocol.events.PacketAdapter;
-import com.comphenix.protocol.events.PacketEvent;
+import com.github.retrooper.packetevents.event.PacketListener;
+import com.github.retrooper.packetevents.event.PacketSendEvent;
+import com.github.retrooper.packetevents.protocol.packettype.PacketType;
+import com.github.retrooper.packetevents.wrapper.play.server.WrapperPlayServerChunkData;
 import org.bukkit.Chunk;
 import org.bukkit.World;
 import org.bukkit.entity.Player;
 
-public class ChunkPacketListener {
+public class ChunkPacketListener implements PacketListener {
 
-    private static boolean initialized = false;
+    private final TuffX plugin;
 
-    public static void initialize(TuffX plugin) {
-        if (initialized) {
-            return;
-        }
+    public ChunkPacketListener(TuffX plugin) {
+        this.plugin = plugin;
+    }
 
-        ProtocolManager protocolManager = ProtocolLibrary.getProtocolManager();
-        if (protocolManager == null) {
-            plugin.getLogger().severe("Could not initialize ChunkPacketListener because ProtocolManager is null!");
-            return;
-        }
+    @Override
+    public void onPacketSend(PacketSendEvent event) {
+        if (event.getPacketType() == PacketType.Play.Server.CHUNK_DATA) {
+            Player player = (Player) event.getPlayer();
 
-        protocolManager.addPacketListener(
-            new PacketAdapter(plugin, PacketType.Play.Server.MAP_CHUNK) {
-                @Override
-                public void onPacketSending(PacketEvent event) {
-                    Player player = event.getPlayer();
-
-                    if (!((TuffX) this.plugin).isPlayerReady(player)) {
-                        return;
-                    }
-
-                    World world = player.getWorld();
-                    int chunkX = event.getPacket().getIntegers().read(0);
-                    int chunkZ = event.getPacket().getIntegers().read(1);
-                    
-                    plugin.getServer().getScheduler().runTaskAsynchronously(plugin, () -> {
-                        if (player.isOnline() && world.isChunkLoaded(chunkX, chunkZ)) {
-                            Chunk chunk = world.getChunkAt(chunkX, chunkZ);
-                            ((TuffX) this.plugin).processAndSendChunk(player, chunk);
-                        }
-                    });
-                }
+            if (player == null || !plugin.isPlayerReady(player)) {
+                return;
             }
-        );
 
-        plugin.getLogger().info("ProtocolLib listener for chunks registered successfully.");
-        initialized = true;
+            WrapperPlayServerChunkData wrapper = new WrapperPlayServerChunkData(event);
+            int chunkX = wrapper.getColumn().getX();
+            int chunkZ = wrapper.getColumn().getZ();
+
+            World world = player.getWorld();
+            
+            plugin.getServer().getScheduler().runTask(plugin, () -> {
+                if (player.isOnline() && world.isChunkLoaded(chunkX, chunkZ)) {
+                    Chunk chunk = world.getChunkAt(chunkX, chunkZ);
+                    plugin.processAndSendChunk(player, chunk);
+                }
+            });
+        }
     }
 }
