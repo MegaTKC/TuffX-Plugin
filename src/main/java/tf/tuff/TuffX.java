@@ -306,45 +306,48 @@ public class TuffX extends JavaPlugin implements Listener, PluginMessageListener
         if (c == null || p == null || !p.isOnline() || cp == null || cp.isShutdown()) {
             return;
         }
+
         final WCK k = new WCK(c.getWorld().getName(), c.getX(), c.getZ());
+
         ObjectArrayList<byte[]> cachedData = cc.getIfPresent(k);
         if (cachedData != null) {
-            if (p.isOnline()) {
-                for (byte[] py : cachedData) {
-                    p.sendPluginMessage(TuffX.this, CH, py);
-                }
+            for (byte[] py : cachedData) {
+                p.sendPluginMessage(this, CH, py);
             }
             return;
         }
+
+        final ChunkSnapshot snapshot = c.getChunkSnapshot(true, false, false);
+
         cp.submit(() -> {
             final ObjectArrayList<byte[]> pp = new ObjectArrayList<>(4);
-            final ChunkSnapshot s = c.getChunkSnapshot(true, false, false);
             final Object2ObjectOpenHashMap<BlockData, int[]> cvt = tlcc.get();
-            cvt.clear(); 
+            cvt.clear();
+
             for (int sy = -4; sy < 0; sy++) {
-                if (!p.isOnline()) {
-                    return;
-                }
+                if (!p.isOnline()) return;
                 try {
-                    byte[] py = csp(s, c.getX(), c.getZ(), sy, cvt);
+                    byte[] py = csp(snapshot, c.getX(), c.getZ(), sy, cvt);
                     if (py != null) {
                         pp.add(py);
                     }
                 } catch (IOException e) {
-                    getLogger().severe("Payload creation failed for " + c.getX() + "," + c.getZ() + ": " + e.getMessage());
+                    getLogger().severe("Payload creation failed for " +
+                            c.getX() + "," + c.getZ() + ": " + e.getMessage());
                 }
             }
-            TuffX.this.cc.put(k, pp);
+
+            cc.put(k, pp);
+
             new BukkitRunnable() {
                 @Override
                 public void run() {
-                    if (p.isOnline()) {
-                        for (byte[] py : pp) {
-                            p.sendPluginMessage(TuffX.this, CH, py);
-                        }
+                    if (!p.isOnline()) return;
+                    for (byte[] py : pp) {
+                        p.sendPluginMessage(TuffX.this, CH, py);
                     }
                 }
-            }.runTask(TuffX.this);
+            }.runTask(this);
         });
     }
 
