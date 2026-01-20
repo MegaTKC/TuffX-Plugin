@@ -43,7 +43,8 @@ public class TuffX extends JavaPlugin implements Listener, PluginMessageListener
 
     public static final String CH = "eagler:below_y0";
     public ViaBlockIds v;
-    
+
+    private final Map<UUID, Queue<Chunk>> chunkSendQueue = new ConcurrentHashMap<>();
     private final ObjectOpenHashSet<UUID> aib = new ObjectOpenHashSet<>();
     private ObjectOpenHashSet<String> ew;
     private Cache<WCK, ObjectArrayList<byte[]>> cc;
@@ -253,19 +254,36 @@ public class TuffX extends JavaPlugin implements Listener, PluginMessageListener
         int playerChunkX = p.getLocation().getChunk().getX();
         int playerChunkZ = p.getLocation().getChunk().getZ();
 
-        getServer().getScheduler().runTaskAsynchronously(this, () -> {
-            for (int x = -viewDistance; x <= viewDistance; x++) {
-                for (int z = -viewDistance; z <= viewDistance; z++) {
-                    int currentChunkX = playerChunkX + x;
-                    int currentChunkZ = playerChunkZ + z;
-                    
-                    if (world.isChunkLoaded(currentChunkX, currentChunkZ)) {
-                        Chunk chunk = world.getChunkAt(currentChunkX, currentChunkZ);
-                        processAndSendChunk(p, chunk);
-                    }
+        Queue<Chunk> queue = new ArrayDeque<>();
+        for (int x = -viewDistance; x <= viewDistance; x++) {
+            for (int z = -viewDistance; z <= viewDistance; z++) {
+                int chunkX = playerChunkX + x;
+                int chunkZ = playerChunkZ + z;
+                if (world.isChunkLoaded(chunkX, chunkZ)) {
+                    queue.add(world.getChunkAt(chunkX, chunkZ));
                 }
             }
-        });
+        }
+
+        chunkSendQueue.put(p.getUniqueId(), queue);
+
+        new BukkitRunnable() {
+            @Override
+            public void run() {
+                Queue<Chunk> q = chunkSendQueue.get(p.getUniqueId());
+                if (q == null || q.isEmpty() || !p.isOnline()) {
+                    chunkSendQueue.remove(p.getUniqueId());
+                    cancel();
+                    return;
+                }
+            
+                for (int i = 0; i < 4; i++) {
+                    Chunk c = q.poll();
+                    if (c == null) break;
+                    processAndSendChunk(p, c);
+                }
+            }
+        }.runTaskTimer(this, 0L, 1L); // Run every tick
     }
 
     private byte[] cby0sp(boolean s) {
